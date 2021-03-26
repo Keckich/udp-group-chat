@@ -66,11 +66,8 @@ def client(group_port, creator):
 
     #socket2
     client = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-    client.bind((host, 0))
-
-    #socket3 
-    send_group_sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
-    send_group_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    ttl = struct.pack('b', 1)
+    client.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, ttl)
 
     print('Your nickname: ', end='', flush=True)
     nickname = input()   
@@ -86,7 +83,7 @@ def client(group_port, creator):
         if msg[-2:] == '#y':
             status = True
             message = nickname + ' connected!'
-            send_group_sock.sendto(message.encode('utf-8'), multicast_group)
+            client.sendto(message.encode('utf-8'), multicast_group)
         else:
             status = False    
 
@@ -95,7 +92,7 @@ def client(group_port, creator):
         thrd.start()
         while True:
             message = input()
-            send_group_sock.sendto(('['+nickname+']'+message).encode('utf-8'), multicast_group)
+            client.sendto(('['+nickname+']'+message).encode('utf-8'), multicast_group)
 
 
 if __name__ == '__main__':
