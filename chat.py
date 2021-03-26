@@ -1,170 +1,111 @@
 import socket 
 import threading
-import string
 import random
+import struct
 
 host = '127.0.0.1'
-port = 5107
-clients = []
+multicast_host = '224.3.22.71'
 clients_addr = []
-want_to_connect = []
-groups = []
-group_client = []
-id_group = 0
 
-
-class Client(object):
-    def __init__(self, id_group, addres, create, status):
-        self.id_group = id_group
-        self.addres = addres
-        self.create = create
-        self.status = status
-
-
-def server():
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM,  socket.IPPROTO_UDP)    
-        sock.bind((host, port))
-        
-        print('Server online...')
-        
-        while True:
-            create, status = False, False
-            data, addres = sock.recvfrom(1024)
-            print(addres[0], addres[1])
-            message = data.decode('utf-8')
-            print(message)
-            if message[-2:] == '#y' and addres in clients_addr:
-                for client in want_to_connect:
-                    for c in clients:
-                        if c.addres == addres:
-                            id_group = c.id_group
-                    if client.id_group == id_group:
-                        status = True
-                        msg = str(status) + ': you can connect to the server with group_id = ' + str(id_group)
-                        client.status = status
-                        group_client.append(client)
-                        want_to_connect.remove(client)
-                        sock.sendto(msg.encode('utf-8'), client.addres)
-                        break
-                continue
-            elif message[-2:] == '#n' and addres in clients_addr:
-                for client in want_to_connect:
-                    for c in clients:
-                        if c.addres == addres:
-                            id_group = c.id_group
-                    if client.id_group == id_group:
-                        status = False
-                        msg = str(status) + ': you can\'t connect to the server with group_id = ' + str(id_group)
-                        client.status = status
-                        clients_addr.remove(client.addres)
-                        want_to_connect.remove(client)
-                        sock.sendto(msg.encode('utf-8'), client.addres)
-                        break
-                continue               
-                    
-
-            if addres not in clients_addr:
-                id_group = message[-10:]
-                clients_addr.append(addres) 
-
-                if message[:7] == 'creator':
-                    create = True
-                    status = True
-                else:     
-                    creator = ''                         
-                    msg = '\n####Only you see this message####\n'+message+'\nDo you agree?[#y/#n]'
-                    for c in group_client:
-                        if c.id_group == id_group and c.create:
-                            creator = c.addres
-                    guest_client = Client(id_group, addres, False, False)
-                    want_to_connect.append(guest_client)                   
-                    sock.sendto(msg.encode('utf-8'), creator)        
-                    create = False    
-                    continue     
+def read_server(sock):
+    while True:    
+        data, addres = sock.recvfrom(1024)
+        message = data.decode('utf-8')
+        if addres not in clients_addr:
+            if message[:7] == 'creator':
+                create = True
+                status = True
+            else:     
+                creator = ''                         
+                msg = '\n####Only you see this message####\n'+message+'\nDo you agree?[#y/#n] '
+                print(msg, addres)
+                answer = input()
+                if answer == '#y':
+                    clients_addr.append(addres)                 
+                sock.sendto(answer.encode('utf-8'), addres)          
+                                 
                 
-                
-                if id_group not in groups:
-                    groups.append(id_group)
-                cur_client = Client(id_group, addres, create, status)  
-                if cur_client not in group_client:
-                    group_client.append(cur_client)
-            print(groups)
-            broadcast(group_client, sock, data, id_group)
-        sock.close()
-        return True
-    except OSError:
-        return False
+
+def server(creator=False):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM,  socket.IPPROTO_UDP)    
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+
+    port = random.randint(2000,5000)
+    sock.bind((host, port))
+
+    print(f'Server online with port: {port}...')
+
+    thrd = threading.Thread(target=read_server,args=(sock,))
+    thrd.start()
+    client(port, creator)
 
 
-def broadcast(clients, sock, data, id_group):
-    for client in clients:
-        if client.id_group == id_group:
-            sock.sendto(data, client.addres)
 
-
-def read_socket(client):
+def read_client(sock):
     while True:
-        data = client.recv(1024)
-        print(data.decode('utf-8'))
+        try:
+            data, server = sock.recvfrom(1024)
+            print(data.decode('utf-8')) 
+        except socket.timeout:
+            print('timed out, no more responses')
+            break        
+            
 
-
-def id_generator(size=10, chars=string.ascii_uppercase + string.digits):
-    return ''.join(random.choice(chars) for _ in range(size))
-
-
-def client():
-    print('Your nickname: ', end='', flush=True)
-    nickname = input()
-    if nickname == '':
-        print('nickname can\'t be emty!')
-        exit(0)
-    user = ''
+def client(group_port, creator):
     status = False
-    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM,  socket.IPPROTO_UDP)
-    client.bind(('', 0))
-    
-    server = (host, port) 
-    print('You want to create new group?[y/n]', end='', flush=True)
-    answer = input()
-    if answer == 'y':
-        user = 'creator ' 
-        group = id_generator()
-        print('Your group id: '+group)
-        status = True        
-        client.sendto((user+nickname+' connected to server with group_id = '+group).encode('utf-8'), server)
-    elif answer == 'n':
-        user = 'guest '
-        print('enter group id you want to connect: ', end='', flush=True)
-        group = input()
+    server = (host, int(group_port))
+    multicast_group = (multicast_host , int(group_port))
+    #socket1
+    group_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM,  socket.IPPROTO_UDP)    
+    group_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+    group_sock.bind(('', int(group_port)))
+
+    group = socket.inet_aton(multicast_host)
+    mreq = struct.pack('4sL', group, socket.INADDR_ANY)
+    group_sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+
+    #socket2
+    client = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    client.bind((host, 0))
+
+    #socket3 
+    send_group_sock = socket.socket(socket.AF_INET,socket.SOCK_DGRAM)
+    send_group_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+
+    print('Your nickname: ', end='', flush=True)
+    nickname = input()   
+    if creator:
+        status = True
+        client.sendto(('creator '+nickname+' connected to server with group_id = '+str(group_port)).encode('utf-8'), server)
+    else:
+        client.sendto(('guest '+nickname+' trying to connect to server with group_id = '+str(group_port)).encode('utf-8'), server)
         print('Trying to connect...')
-        client.sendto((user+nickname+' trying to connect to server with group_id = '+group).encode('utf-8'), server)
         data = client.recv(1024)
         msg = data.decode('utf-8')
         print('Data to guest: '+ msg)
-        if msg[:4] == 'True':
+        if msg[-2:] == '#y':
             status = True
+            message = nickname + ' connected!'
+            send_group_sock.sendto(message.encode('utf-8'), multicast_group)
         else:
-            status = False
-    else:
-        print('Wrong input')
-        exit(0)
+            status = False    
 
     if status:
-        thrd = threading.Thread(target=read_socket, args=(client,))
+        thrd = threading.Thread(target=read_client, args=(group_sock,))
         thrd.start()
         while True:
             message = input()
-            client.sendto(('['+nickname+']'+message).encode('utf-8'), server)
-
-def main():
-    connect_server = server()
-    if not connect_server:
-        client()
-    else:
-        pass
-
+            send_group_sock.sendto(('['+nickname+']'+message).encode('utf-8'), multicast_group)
 
 
 if __name__ == '__main__':
-    main()
+    creator = False
+    print('You want to create new group?[y/n]', end='', flush=True)
+    answer = input()
+    if answer == 'y':
+        creator = True
+        server(creator)
+    else:
+        print('Enter group id:', end='', flush=True)
+        g_port = input()
+        client(g_port, creator)
